@@ -8,70 +8,83 @@ interface UseVoiceOptions {
   onCommand?: (command: string) => void
 }
 
+// Detect Safari iOS
+function isSafariIOS(): boolean {
+  if (typeof navigator === "undefined") return false
+  const ua = navigator.userAgent
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+  return isIOS && isSafari
+}
+
+// Detect if browser supports speech recognition
+function getSpeechRecognitionSupport(): { supported: boolean; isSafariMobile: boolean } {
+  if (typeof window === "undefined") return { supported: false, isSafariMobile: false }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+  return {
+    supported: !!SpeechRecognition,
+    isSafariMobile: isSafariIOS()
+  }
+}
+
 export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = {}) {
   const { state, setState, setLastCommand, setLastResponse } = useApex()
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const synthRef = useRef<SpeechSynthesis | null>(null)
   const [isSupported, setIsSupported] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isSafariMobile, setIsSafariMobile] = useState(false)
   const isListeningForCommandRef = useRef(false)
+  const isActiveRef = useRef(false)
+  const restartTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   
   // Initialize speech recognition
   useEffect(() => {
     if (typeof window === "undefined") return
     
-    console.log("[v0] Initializing speech recognition...")
+    const { supported, isSafariMobile: isSafari } = getSpeechRecognitionSupport()
+    setIsSafariMobile(isSafari)
     
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
-      console.log("[v0] Speech recognition not supported")
-      setError("Speech recognition is not supported in this browser. Try Chrome or Safari.")
+      setError("Speech recognition is not supported. Please use text input instead.")
       return
     }
     
-    console.log("[v0] Speech recognition API found:", SpeechRecognition.name || "webkitSpeechRecognition")
     setIsSupported(true)
     synthRef.current = window.speechSynthesis
     
     const recognition = new SpeechRecognition()
-    // Safari works better with continuous = false and manual restarts
-    recognition.continuous = true
-    recognition.interimResults = true // Enable interim results for better responsiveness
+    
+    // Safari iOS requires different settings
+    if (isSafari) {
+      // Safari iOS doesn't support continuous mode well
+      recognition.continuous = false
+      recognition.interimResults = false
+    } else {
+      recognition.continuous = true
+      recognition.interimResults = true
+    }
+    
     recognition.lang = "en-US"
     recognition.maxAlternatives = 1
     
-    recognition.onstart = () => {
-      console.log("[v0] Speech recognition started successfully")
-    }
-    
-    recognition.onaudiostart = () => {
-      console.log("[v0] Audio capture started - microphone is working")
-    }
-    
-    recognition.onspeechstart = () => {
-      console.log("[v0] Speech detected")
-    }
-    
     recognition.onresult = (event) => {
       const lastResult = event.results[event.results.length - 1]
-      console.log("[v0] Recognition result:", lastResult[0].transcript, "isFinal:", lastResult.isFinal)
       
-      if (!lastResult.isFinal) return
+      if (!lastResult.isFinal && !isSafari) return
       
       const transcript = lastResult[0].transcript.toLowerCase().trim()
-      console.log("[v0] Final transcript:", transcript)
       
       if (!isListeningForCommandRef.current) {
         // Check for wake word
         if (transcript.includes(wakeWord.toLowerCase())) {
-          console.log("[v0] Wake word detected!")
           isListeningForCommandRef.current = true
           setState("listening")
           speak("Yes, I'm listening")
         }
       } else {
         // Process command
-        console.log("[v0] Processing command:", transcript)
         isListeningForCommandRef.current = false
         setLastCommand(transcript)
         processCommand(transcript)
@@ -79,54 +92,78 @@ export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = 
     }
     
     recognition.onerror = (event) => {
-      console.error("[v0] Speech recognition error:", event.error, event)
+      // Handle specific errors silently for expected cases
+      if (event.error === "no-speech" || event.error === "aborted") {
+        return
+      }
       
-      // Handle specific errors
       if (event.error === "not-allowed") {
-        setError("Microphone access denied. Please allow microphone access in your browser settings and reload the page.")
-      } else if (event.error === "no-speech") {
-        // This is normal - just means no speech was detected, don't show error
-        console.log("[v0] No speech detected, continuing to listen...")
+        setError("Microphone access denied. Please allow microphone in browser settings.")
       } else if (event.error === "network") {
-        setError("Network error. Speech recognition requires an internet connection.")
+        setError("Network error. Speech recognition requires internet connection.")
       } else if (event.error === "audio-capture") {
         setError("No microphone found. Please connect a microphone.")
-      } else if (event.error === "aborted") {
-        console.log("[v0] Recognition aborted")
       } else {
-        setError(`Speech recognition error: ${event.error}`)
+        setError(`Voice error: ${event.error}. Try using text input instead.`)
       }
     }
     
     recognition.onend = () => {
-      console.log("[v0] Speech recognition ended, attempting restart...")
-      // Restart recognition to keep listening
-      if (recognitionRef.current && state !== "speaking") {
-        // Small delay before restart to prevent rapid cycling
-        setTimeout(() => {
+      // Only restart if we're supposed to be actively listening
+      if (isActiveRef.current && state !== "speaking") {
+        // Clear any existing restart timeout
+        if (restartTimeoutRef.current) {
+          clearTimeout(restartTimeoutRef.current)
+        }
+        
+        // Delay restart to prevent rapid cycling (longer delay for Safari)
+        const delay = isSafari ? 300 : 100
+        restartTimeoutRef.current = setTimeout(() => {
           try {
-            recognitionRef.current?.start()
-            console.log("[v0] Recognition restarted")
-          } catch (e) {
-            console.log("[v0] Could not restart recognition:", e)
+            if (isActiveRef.current && recognitionRef.current) {
+              recognitionRef.current.start()
+            }
+          } catch {
+            // Already started or other issue
           }
-        }, 100)
+        }, delay)
       }
     }
     
     recognitionRef.current = recognition
     
     return () => {
-      console.log("[v0] Cleaning up speech recognition")
-      recognition.stop()
+      isActiveRef.current = false
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current)
+      }
+      try {
+        recognition.stop()
+      } catch {
+        // Already stopped
+      }
     }
-  }, [wakeWord, setState, setLastCommand])
+  }, [wakeWord, setState, setLastCommand, state])
   
   const speak = useCallback((text: string) => {
-    if (!synthRef.current) return
-    
     setState("speaking")
     setLastResponse(text)
+    
+    // Check if speech synthesis is available
+    if (!synthRef.current) {
+      // No speech synthesis available - just set state back after a delay
+      setTimeout(() => setState("idle"), 1000)
+      return
+    }
+    
+    // Stop recognition while speaking to avoid feedback
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {
+        // Already stopped
+      }
+    }
     
     // Cancel any ongoing speech
     synthRef.current.cancel()
@@ -138,6 +175,16 @@ export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = 
     
     utterance.onend = () => {
       setState("idle")
+      // Restart recognition after speaking
+      if (isActiveRef.current && recognitionRef.current) {
+        setTimeout(() => {
+          try {
+            recognitionRef.current?.start()
+          } catch {
+            // Already started
+          }
+        }, 200)
+      }
     }
     
     utterance.onerror = () => {
@@ -178,37 +225,43 @@ export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = 
   }, [speak, onCommand])
   
   const startListening = useCallback(async () => {
-    console.log("[v0] startListening called")
-    
     if (!recognitionRef.current) {
-      console.log("[v0] No recognition ref available")
+      setError("Voice recognition not available. Please use text input.")
       return
     }
     
     // First verify we have microphone permission
     try {
-      console.log("[v0] Requesting microphone access...")
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       // Stop the test stream
       stream.getTracks().forEach(track => track.stop())
-      console.log("[v0] Microphone access confirmed")
-    } catch (err) {
-      console.error("[v0] Microphone access failed:", err)
-      setError("Microphone access denied. Please allow microphone in browser settings and reload.")
+    } catch {
+      setError("Microphone access denied. Please allow microphone in browser settings.")
       return
     }
     
+    isActiveRef.current = true
+    setError(null)
+    
     try {
       recognitionRef.current.start()
-      console.log("[v0] Recognition start() called successfully")
-    } catch (e) {
-      console.log("[v0] Recognition start error (may already be running):", e)
+    } catch {
+      // Already started - that's ok
     }
   }, [])
   
   const stopListening = useCallback(() => {
-    if (!recognitionRef.current) return
-    recognitionRef.current.stop()
+    isActiveRef.current = false
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {
+        // Already stopped
+      }
+    }
     isListeningForCommandRef.current = false
     setState("idle")
   }, [setState])
@@ -220,6 +273,7 @@ export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = 
   
   return {
     isSupported,
+    isSafariMobile,
     error,
     state,
     startListening,

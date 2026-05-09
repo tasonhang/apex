@@ -32,25 +32,20 @@ export function MicPermissionModal({
   const requestMicPermission = async () => {
     setIsRequesting(true)
     setError(null)
-    console.log("[v0] Requesting microphone permission...")
 
     try {
       // Check if mediaDevices API is available
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        console.log("[v0] MediaDevices API not available")
         setError("Your browser doesn't support microphone access. Please use Chrome or Safari.")
         setIsRequesting(false)
         return
       }
 
       // Request microphone access - this triggers the browser's permission prompt
-      console.log("[v0] Calling getUserMedia...")
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      console.log("[v0] Got media stream:", stream)
       
       // Verify we got audio tracks
       const audioTracks = stream.getAudioTracks()
-      console.log("[v0] Audio tracks:", audioTracks.length, audioTracks.map(t => t.label))
       
       if (audioTracks.length === 0) {
         setError("No audio track found. Please check your microphone connection.")
@@ -59,18 +54,11 @@ export function MicPermissionModal({
       }
       
       // Stop the stream immediately - we just needed to trigger the permission
-      stream.getTracks().forEach(track => {
-        console.log("[v0] Stopping track:", track.label)
-        track.stop()
-      })
+      stream.getTracks().forEach(track => track.stop())
       
-      console.log("[v0] Microphone permission granted!")
       onPermissionGranted()
     } catch (err) {
-      console.error("[v0] Microphone permission error:", err)
-      
       if (err instanceof Error) {
-        console.log("[v0] Error name:", err.name, "message:", err.message)
         
         if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
           // Check if we're in an iframe (like v0 preview)
