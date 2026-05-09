@@ -1,20 +1,11 @@
 "use client"
 
-import { useRef, useCallback, useState } from "react"
+import { useRef, useCallback, useState, useEffect } from "react"
 import { useApex } from "@/contexts/apex-context"
 
 interface UseVoiceOptions {
   wakeWord?: string
   onCommand?: (command: string) => void
-}
-
-// Detect Safari iOS
-function isSafariIOS(): boolean {
-  if (typeof navigator === "undefined") return false
-  const ua = navigator.userAgent
-  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
-  return isIOS && isSafari
 }
 
 export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = {}) {
@@ -23,13 +14,21 @@ export function useVoice({ wakeWord = "wake up", onCommand }: UseVoiceOptions = 
   const synthRef = useRef<SpeechSynthesis | null>(null)
   const [isListening, setIsListening] = useState(false)
   const [hasPermission, setHasPermission] = useState(false)
+  const [isSupported, setIsSupported] = useState(false)
+  const [isSafariMobile, setIsSafariMobile] = useState(false)
   const isListeningForCommandRef = useRef(false)
   
-  // Check if speech recognition is available (don't initialize yet - wait for user gesture)
-  const isSupported = typeof window !== "undefined" && 
-    (window.SpeechRecognition || window.webkitSpeechRecognition)
-  
-  const isSafariMobile = isSafariIOS()
+  // Check browser capabilities on mount (client-side only)
+  useEffect(() => {
+    const hasSpeechRecognition = !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+    setIsSupported(hasSpeechRecognition)
+    
+    // Detect Safari iOS
+    const ua = navigator.userAgent
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+    const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+    setIsSafariMobile(isIOS && isSafari)
+  }, [])
   
   const speak = useCallback((text: string) => {
     setState("speaking")
