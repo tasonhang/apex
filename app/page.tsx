@@ -88,15 +88,14 @@ function ApexDashboard() {
         </div>
 
         {/* Mic Button - positioned below sphere */}
-        {isSupported && (
-          <div className="absolute bottom-32 left-1/2 -translate-x-1/2">
-            <MicButton
-              isListening={isListening}
-              onTap={handleMicTap}
-              state={state}
-            />
-          </div>
-        )}
+        <div className="absolute bottom-32 left-1/2 -translate-x-1/2">
+          <MicButton
+            isListening={isListening}
+            onTap={handleMicTap}
+            state={state}
+            disabled={!isSupported}
+          />
+        </div>
 
         {/* Text Input Toggle and Quick Actions */}
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-full max-w-lg px-4">
@@ -152,11 +151,7 @@ function ApexDashboard() {
                 >
                   Or type a command
                 </button>
-                {isSafariMobile && (
-                  <p className="text-xs text-muted-foreground text-center">
-                    Tap the mic button and speak your command
-                  </p>
-                )}
+                
               </motion.div>
             )}
           </AnimatePresence>
